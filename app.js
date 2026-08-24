@@ -53,13 +53,43 @@ if (fs.existsSync(DATA_FILE)) {
     } catch(e) {}
 }
 
+let useMemoryDb = false;
+
 const enableMemoryDb = () => {
     console.log('⚠️ Falling back to In-Memory Database for Vercel deployment!');
+    useMemoryDb = true;
     
-    // Override User
+    // Override Mongoose instance save method globally
+    const originalSave = mongoose.Model.prototype.save;
+    mongoose.Model.prototype.save = async function(options) {
+        if (useMemoryDb) {
+            const modelName = this.constructor.modelName;
+            if (modelName === 'User') {
+                const userObj = { id: this.id, username: this.username, password: this.password };
+                const existingIdx = memoryUsers.findIndex(u => u.username === this.username);
+                if (existingIdx !== -1) memoryUsers[existingIdx] = userObj;
+                else memoryUsers.push(userObj);
+            } else if (modelName === 'Task') {
+                const taskObj = { id: this.id, userId: this.userId, title: this.title, done: this.done };
+                const existingIdx = memoryTasks.findIndex(t => t.id === this.id);
+                if (existingIdx !== -1) memoryTasks[existingIdx] = taskObj;
+                else memoryTasks.push(taskObj);
+            } else if (modelName === 'RefreshToken') {
+                const tokenObj = { token: this.token, userId: this.userId };
+                const existingIdx = memoryRefreshTokens.findIndex(t => t.token === this.token);
+                if (existingIdx !== -1) memoryRefreshTokens[existingIdx] = tokenObj;
+                else memoryRefreshTokens.push(tokenObj);
+            }
+            return this;
+        }
+        return originalSave.apply(this, arguments);
+    };
+
+    // Override User Model static queries
     User.countDocuments = async () => memoryUsers.length;
     User.findOne = async (query) => {
-        return memoryUsers.find(u => u.username === query.username) || null;
+        const u = memoryUsers.find(x => x.username === query.username);
+        return u ? new User(u) : null;
     };
     User.find = () => {
         return {
@@ -69,19 +99,14 @@ const enableMemoryDb = () => {
         };
     };
     User.insertMany = async (users) => {
-        memoryUsers.push(...users);
+        for (const u of users) {
+            const userDoc = new User(u);
+            await userDoc.save();
+        }
         return users;
     };
-    User.prototype.save = async function() {
-        memoryUsers.push({
-            id: this.id,
-            username: this.username,
-            password: this.password
-        });
-        return this;
-    };
 
-    // Override Task
+    // Override Task Model static queries
     Task.countDocuments = async () => memoryTasks.length;
     Task.find = (query) => {
         if (!query || query.userId === undefined) {
@@ -91,55 +116,29 @@ const enableMemoryDb = () => {
                 })
             };
         }
-        return memoryTasks.filter(t => t.userId === query.userId);
+        return memoryTasks.filter(t => t.userId === query.userId).map(t => new Task(t));
     };
     Task.findOne = async (query) => {
-        const task = memoryTasks.find(t => t.id === query.id && t.userId === query.userId);
-        if (task) {
-            return {
-                id: task.id,
-                userId: task.userId,
-                title: task.title,
-                done: task.done,
-                save: async function() {
-                    const idx = memoryTasks.findIndex(t => t.id === query.id);
-                    if (idx !== -1) {
-                        memoryTasks[idx] = {
-                            id: this.id,
-                            userId: this.userId,
-                            title: this.title,
-                            done: this.done
-                        };
-                    }
-                    return this;
-                }
-            };
-        }
-        return null;
+        const t = memoryTasks.find(x => x.id === query.id && (query.userId === undefined || x.userId === query.userId));
+        return t ? new Task(t) : null;
     };
     Task.deleteOne = async (query) => {
         const initialLen = memoryTasks.length;
-        memoryTasks = memoryTasks.filter(t => !(t.id === query.id && t.userId === query.userId));
+        memoryTasks = memoryTasks.filter(t => !(t.id === query.id && (query.userId === undefined || t.userId === query.userId)));
         return { deletedCount: initialLen - memoryTasks.length };
     };
     Task.insertMany = async (tasks) => {
-        memoryTasks.push(...tasks);
+        for (const t of tasks) {
+            const taskDoc = new Task(t);
+            await taskDoc.save();
+        }
         return tasks;
     };
-    Task.prototype.save = async function() {
-        const taskObj = {
-            id: this.id,
-            userId: this.userId,
-            title: this.title,
-            done: this.done
-        };
-        memoryTasks.push(taskObj);
-        return this;
-    };
 
-    // Override RefreshToken
+    // Override RefreshToken Model static queries
     RefreshToken.findOne = async (query) => {
-        return memoryRefreshTokens.find(t => t.token === query.token) || null;
+        const r = memoryRefreshTokens.find(x => x.token === query.token);
+        return r ? new RefreshToken(r) : null;
     };
     RefreshToken.deleteOne = async (query) => {
         const initialLen = memoryRefreshTokens.length;
@@ -147,15 +146,9 @@ const enableMemoryDb = () => {
         return { deletedCount: initialLen - memoryRefreshTokens.length };
     };
     RefreshToken.deleteMany = async (query) => {
+        const initialLen = memoryRefreshTokens.length;
         memoryRefreshTokens = memoryRefreshTokens.filter(t => t.userId !== query.userId);
-        return { deletedCount: 1 };
-    };
-    RefreshToken.prototype.save = async function() {
-        memoryRefreshTokens.push({
-            token: this.token,
-            userId: this.userId
-        });
-        return this;
+        return { deletedCount: initialLen - memoryRefreshTokens.length };
     };
 };
 
