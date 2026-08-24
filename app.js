@@ -386,7 +386,8 @@ app.get('/tasks', async (req, res) => {
         const tasks = await Task.find({ userId: req.user.id }, { _id: 0, __v: 0 });
         res.status(200).json(tasks);
     } catch (err) {
-        res.status(500).json({ message: "Internal server error" });
+        console.error("ERROR in GET /tasks:", err);
+        res.status(500).json({ message: "Internal server error: " + err.message, stack: err.stack });
     }
 });
 
@@ -415,7 +416,8 @@ app.post('/tasks', async (req, res) => {
             done: newTask.done
         });
     } catch (err) {
-        res.status(500).json({ message: "Internal server error" });
+        console.error("ERROR in POST /tasks:", err);
+        res.status(500).json({ message: "Internal server error: " + err.message, stack: err.stack });
     }
 });
 
