@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 
-const API_URL = 'http://localhost:3000';
+const API_URL = 'https://b3-lake.vercel.app';
 
 // Simple helper to decode JWT payload without library dependency
 const decodeJwt = (token) => {
