@@ -226,7 +226,8 @@ app.post(['/register', '/auth/register'], async (req, res) => {
         await newUser.save();
         res.status(201).json({ message: "User registered successfully" });
     } catch (err) {
-        res.status(500).json({ message: "Internal server error" });
+        console.error("ERROR in POST /auth/register:", err);
+        res.status(500).json({ message: "Internal server error: " + err.message, stack: err.stack });
     }
 });
 
@@ -265,7 +266,8 @@ app.post(['/login', '/auth/login'], async (req, res) => {
 
         res.status(200).json({ token, refreshToken });
     } catch (err) {
-        res.status(500).json({ message: "Internal server error" });
+        console.error("ERROR in POST /auth/login:", err);
+        res.status(500).json({ message: "Internal server error: " + err.message, stack: err.stack });
     }
 });
 
