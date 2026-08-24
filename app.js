@@ -31,6 +31,134 @@ const User = require('./models/User');
 const Task = require('./models/Task');
 const RefreshToken = require('./models/RefreshToken');
 
+let memoryUsers = [];
+let memoryTasks = [];
+let memoryRefreshTokens = [];
+
+// Seed memory database with files if they exist
+if (fs.existsSync(USERS_FILE)) {
+    try {
+        memoryUsers = JSON.parse(fs.readFileSync(USERS_FILE, 'utf8'));
+    } catch(e) {}
+}
+if (fs.existsSync(DATA_FILE)) {
+    try {
+        const raw = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+        memoryTasks = raw.map(t => ({
+            id: t.id,
+            userId: 1,
+            title: t.title,
+            done: t.done === 'true' || t.done === true
+        }));
+    } catch(e) {}
+}
+
+const enableMemoryDb = () => {
+    console.log('⚠️ Falling back to In-Memory Database for Vercel deployment!');
+    
+    // Override User
+    User.countDocuments = async () => memoryUsers.length;
+    User.findOne = async (query) => {
+        return memoryUsers.find(u => u.username === query.username) || null;
+    };
+    User.find = () => {
+        return {
+            select: () => ({
+                lean: () => memoryUsers
+            })
+        };
+    };
+    User.insertMany = async (users) => {
+        memoryUsers.push(...users);
+        return users;
+    };
+    User.prototype.save = async function() {
+        memoryUsers.push({
+            id: this.id,
+            username: this.username,
+            password: this.password
+        });
+        return this;
+    };
+
+    // Override Task
+    Task.countDocuments = async () => memoryTasks.length;
+    Task.find = (query) => {
+        if (!query || query.userId === undefined) {
+            return {
+                select: () => ({
+                    lean: () => memoryTasks
+                })
+            };
+        }
+        return memoryTasks.filter(t => t.userId === query.userId);
+    };
+    Task.findOne = async (query) => {
+        const task = memoryTasks.find(t => t.id === query.id && t.userId === query.userId);
+        if (task) {
+            return {
+                id: task.id,
+                userId: task.userId,
+                title: task.title,
+                done: task.done,
+                save: async function() {
+                    const idx = memoryTasks.findIndex(t => t.id === query.id);
+                    if (idx !== -1) {
+                        memoryTasks[idx] = {
+                            id: this.id,
+                            userId: this.userId,
+                            title: this.title,
+                            done: this.done
+                        };
+                    }
+                    return this;
+                }
+            };
+        }
+        return null;
+    };
+    Task.deleteOne = async (query) => {
+        const initialLen = memoryTasks.length;
+        memoryTasks = memoryTasks.filter(t => !(t.id === query.id && t.userId === query.userId));
+        return { deletedCount: initialLen - memoryTasks.length };
+    };
+    Task.insertMany = async (tasks) => {
+        memoryTasks.push(...tasks);
+        return tasks;
+    };
+    Task.prototype.save = async function() {
+        const taskObj = {
+            id: this.id,
+            userId: this.userId,
+            title: this.title,
+            done: this.done
+        };
+        memoryTasks.push(taskObj);
+        return this;
+    };
+
+    // Override RefreshToken
+    RefreshToken.findOne = async (query) => {
+        return memoryRefreshTokens.find(t => t.token === query.token) || null;
+    };
+    RefreshToken.deleteOne = async (query) => {
+        const initialLen = memoryRefreshTokens.length;
+        memoryRefreshTokens = memoryRefreshTokens.filter(t => t.token !== query.token);
+        return { deletedCount: initialLen - memoryRefreshTokens.length };
+    };
+    RefreshToken.deleteMany = async (query) => {
+        memoryRefreshTokens = memoryRefreshTokens.filter(t => t.userId !== query.userId);
+        return { deletedCount: 1 };
+    };
+    RefreshToken.prototype.save = async function() {
+        memoryRefreshTokens.push({
+            token: this.token,
+            userId: this.userId
+        });
+        return this;
+    };
+};
+
 // Connect to MongoDB
 mongoose.connect(MONGODB_URI)
     .then(() => {
@@ -38,7 +166,9 @@ mongoose.connect(MONGODB_URI)
         runMigration();
     })
     .catch(err => {
-        console.error('Failed to connect to MongoDB:', err);
+        console.error('Failed to connect to MongoDB:', err.message);
+        enableMemoryDb();
+        runMigration();
     });
 
 // Migration logic to import initial data from JSON files if database is empty
